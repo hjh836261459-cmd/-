@@ -22,17 +22,6 @@ DEFAULT_MAIL = "hjh836261459@qq.com"
 OUT_DIR = Path("out")
 TZ = dt.timezone(dt.timedelta(hours=8))
 
-CATEGORIES = [
-    "今日要点",
-    "技术与模型",
-    "公司与产品新闻",
-    "中国 AI/AIGC 动态",
-    "政策、监管与安全",
-    "投融资与产业",
-    "应用与生态",
-    "编辑观察",
-]
-
 CHINA_MARKERS = [
     "中国", "国内", "北京", "上海", "深圳", "杭州", "广州", "香港", "阿里", "百度", "腾讯", "华为",
     "字节", "豆包", "通义", "文心", "混元", "盘古", "Kimi", "月之暗面", "智谱", "阶跃星辰",
@@ -136,7 +125,7 @@ def source_from(node: ET.Element, title: str) -> str:
 def fetch_items(group: str, locale: str, query: str, limit: int = 14) -> list[NewsItem]:
     request = urllib.request.Request(
         rss_url(query, locale),
-        headers={"User-Agent": "Mozilla/5.0 ai-aigc-news-editor/2.0"},
+        headers={"User-Agent": "Mozilla/5.0 ai-aigc-news-editor/2.1"},
     )
     with urllib.request.urlopen(request, timeout=25) as response:
         root = ET.fromstring(response.read())
@@ -148,17 +137,7 @@ def fetch_items(group: str, locale: str, query: str, limit: int = 14) -> list[Ne
         snippet = clean(node.findtext("description") or "")[:520]
         if not title or not link:
             continue
-        items.append(
-            NewsItem(
-                title=title,
-                source=source_from(node, title),
-                published=parse_date(node.findtext("pubDate")),
-                link=link,
-                snippet=snippet,
-                query_group=group,
-                locale=locale,
-            )
-        )
+        items.append(NewsItem(title, source_from(node, title), parse_date(node.findtext("pubDate")), link, snippet, group, locale))
     return items
 
 
@@ -180,22 +159,17 @@ def is_china(item: NewsItem) -> bool:
 
 def is_low_quality(item: NewsItem) -> bool:
     text = f"{item.title} {item.source} {item.snippet}".lower()
-    if contains_any(text, LOW_QUALITY_MARKERS):
-        return True
-    if len(item.title) < 8:
-        return True
-    return False
+    return contains_any(text, LOW_QUALITY_MARKERS) or len(item.title) < 8
 
 
 def score(item: NewsItem) -> int:
     text = f"{item.title} {item.source} {item.snippet}".lower()
-    points = 0
     high_signal = [
         "openai", "anthropic", "deepmind", "google", "microsoft", "nvidia", "meta", "apple",
         "model", "agent", "benchmark", "open source", "regulation", "safety", "funding", "chip", "data center",
         "大模型", "人工智能", "生成式", "智能体", "多模态", "开源", "算力", "芯片", "监管", "融资", "备案",
     ]
-    points += sum(2 for word in high_signal if word in text)
+    points = sum(2 for word in high_signal if word in text)
     if is_china(item):
         points += 3
     if item.published:
@@ -232,10 +206,10 @@ def collect_news() -> list[NewsItem]:
     return unique
 
 
-def editor_instructions() -> str:
-    return """
+def editor_prompt(date: str, candidates: list[dict[str, str]]) -> str:
+    return f"""
 你是一名资深 AI 产业与技术新闻编辑，写给一位希望快速理解 AI/AIGC 行业变化的中文读者。
-你的任务不是罗列链接，而是从候选新闻中筛选真正有价值的信息，翻译、归并、总结成高质量中文简报。
+请从候选新闻中筛选真正有价值的信息，翻译、归并、总结成高质量中文简报。
 
 硬性要求：
 1. 全文必须使用中文。英文标题和英文摘要必须翻译并重写为自然中文。
@@ -243,44 +217,33 @@ def editor_instructions() -> str:
 3. 每条新闻必须说明：发生了什么、为什么重要、可能影响谁/哪个方向。
 4. 不要把链接当正文。链接只放在每条末尾作为来源。
 5. 不要编造候选新闻里没有的数字、融资金额、公司结论或发布时间。信息不足时写“基于来源摘要判断”。
-6. 输出 Markdown，结构固定如下：
+6. 分类包括：技术与模型、公司与产品新闻、中国 AI/AIGC 动态、政策/监管/安全、投融资与产业、应用与生态、编辑观察。
+7. 如果某个分类没有高质量新闻，可以省略。必须保留“中国 AI/AIGC 动态”中最有价值的中国相关新闻。
 
-# AI/AIGC 每日高质量简报 - YYYY-MM-DD
-
+输出 Markdown，结构如下：
+# AI/AIGC 每日高质量简报 - {date}
 ## 今日要点
-用 3-5 条短句概括今天最值得关注的变化。
-
+3-5 条。
 ## 技术与模型
-每条格式：
 ### 中文标题
 来源：来源｜时间：时间
-摘要：2-3 句中文总结。
-影响：1 句说明它对技术路线、开发者或行业的意义。
+摘要：2-3 句。
+影响：1 句。
 链接：URL
-
 ## 公司与产品新闻
-同上。
-
 ## 中国 AI/AIGC 动态
-同上。必须优先保留中国相关动态。
-
 ## 政策、监管与安全
-同上。
-
 ## 投融资与产业
-同上。
-
 ## 应用与生态
-同上。
-
 ## 编辑观察
-给出 4-6 条趋势判断，其中至少 2 条必须结合中国市场、政策或产业环境。
+4-6 条趋势判断，其中至少 2 条结合中国市场、政策或产业环境。
 
-如果某个分类没有高质量新闻，可以省略该分类。不要输出“候选新闻列表”。
+候选新闻 JSON：
+{json.dumps(candidates, ensure_ascii=False, indent=2)}
 """.strip()
 
 
-def extract_response_text(data: dict) -> str:
+def extract_openai_text(data: dict) -> str:
     if isinstance(data.get("output_text"), str) and data["output_text"].strip():
         return data["output_text"].strip()
     parts: list[str] = []
@@ -294,38 +257,77 @@ def extract_response_text(data: dict) -> str:
     raise RuntimeError("OpenAI response did not contain text output.")
 
 
-def build_editor_brief(items: list[NewsItem], generated_at: dt.datetime) -> str | None:
+def extract_gemini_text(data: dict) -> str:
+    parts: list[str] = []
+    for candidate in data.get("candidates", []) or []:
+        content = candidate.get("content", {})
+        for part in content.get("parts", []) or []:
+            text = part.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+    if parts:
+        return "\n".join(parts).strip()
+    raise RuntimeError("Gemini response did not contain text output.")
+
+
+def build_openai_brief(prompt: str) -> str | None:
     api_key = env("OPENAI_API_KEY")
     if not api_key:
         return None
-
-    model = env("OPENAI_MODEL", "gpt-5-mini")
-    candidates = [item.record() for item in sorted(items, key=score, reverse=True)[:55]]
     payload = {
-        "model": model,
-        "instructions": editor_instructions(),
-        "input": "生成日期：{}\n候选新闻 JSON：\n{}".format(
-            generated_at.date().isoformat(),
-            json.dumps(candidates, ensure_ascii=False, indent=2),
-        ),
+        "model": env("OPENAI_MODEL", "gpt-5-mini"),
+        "input": prompt,
         "max_output_tokens": int(env("OPENAI_MAX_OUTPUT_TOKENS", "7000")),
     }
     request = urllib.request.Request(
         "https://api.openai.com/v1/responses",
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         method="POST",
     )
-    try:
-        with urllib.request.urlopen(request, timeout=120) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")[:1000]
-        raise RuntimeError(f"OpenAI API failed: HTTP {exc.code}: {detail}") from exc
-    return extract_response_text(data)
+    with urllib.request.urlopen(request, timeout=120) as response:
+        return extract_openai_text(json.loads(response.read().decode("utf-8")))
+
+
+def build_gemini_brief(prompt: str) -> str | None:
+    api_key = env("GEMINI_API_KEY")
+    if not api_key:
+        return None
+    model = env("GEMINI_MODEL", "gemini-2.5-flash")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={urllib.parse.quote(api_key)}"
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.25, "maxOutputTokens": int(env("GEMINI_MAX_OUTPUT_TOKENS", "7000"))},
+    }
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=120) as response:
+        return extract_gemini_text(json.loads(response.read().decode("utf-8")))
+
+
+def build_editor_brief(items: list[NewsItem], generated_at: dt.datetime) -> tuple[str | None, str]:
+    candidates = [item.record() for item in sorted(items, key=score, reverse=True)[:55]]
+    prompt = editor_prompt(generated_at.date().isoformat(), candidates)
+    errors: list[str] = []
+
+    for name, builder in (("OpenAI", build_openai_brief), ("Gemini", build_gemini_brief)):
+        try:
+            result = builder(prompt)
+            if result:
+                return result, name
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")[:800]
+            errors.append(f"{name} HTTP {exc.code}: {detail}")
+        except Exception as exc:
+            errors.append(f"{name}: {exc}")
+
+    if errors:
+        raise RuntimeError("; ".join(errors))
+    return None, "rules"
 
 
 def fallback_category(item: NewsItem) -> str:
@@ -343,26 +345,21 @@ def fallback_category(item: NewsItem) -> str:
 
 def build_rule_brief(items: list[NewsItem], generated_at: dt.datetime, note: str = "") -> str:
     selected = sorted(items, key=score, reverse=True)[:18]
-    groups: dict[str, list[NewsItem]] = {category: [] for category in CATEGORIES}
+    groups: dict[str, list[NewsItem]] = {}
     for item in selected:
         groups.setdefault(fallback_category(item), []).append(item)
 
     date = generated_at.date().isoformat()
-    lines = [
-        f"# AI/AIGC 每日高质量简报 - {date}",
-        "",
-    ]
+    lines = [f"# AI/AIGC 每日高质量简报 - {date}", ""]
     if note:
         lines.extend([f"> 说明：{note}", ""])
     lines.extend([
         "## 今日要点",
         "",
         "- 本期已过滤重复、低信息量和明显营销化内容，优先保留模型、产品、政策、投融资和中国市场相关动态。",
-        "- 建议配置 OPENAI_API_KEY，以启用真正的编辑级中文筛选、翻译和深度总结。",
-        "- 以下为规则版简报，已尽量避免只堆链接，但总结深度低于模型编辑版。",
+        "- 当前为规则版简报，建议检查 Gemini/OpenAI API 配置以获得更自然的中文编辑总结。",
         "",
     ])
-
     for category in ["技术与模型", "公司与产品新闻", "中国 AI/AIGC 动态", "政策、监管与安全", "投融资与产业", "应用与生态"]:
         rows = groups.get(category, [])[:5]
         if not rows:
@@ -374,11 +371,10 @@ def build_rule_brief(items: list[NewsItem], generated_at: dt.datetime, note: str
                 f"### {title}",
                 f"来源：{item.source}｜时间：{format_date(item.published)}",
                 f"摘要：{item.snippet or '基于标题判断，这是一条与 AI/AIGC 相关的动态，建议结合来源查看细节。'}",
-                "影响：这条动态值得关注，因为它可能影响 AI 技术路线、产品竞争、产业投入或监管环境。",
+                "影响：这条动态可能影响 AI 技术路线、产品竞争、产业投入或监管环境。",
                 f"链接：{item.link}",
                 "",
             ])
-
     lines.extend([
         "## 编辑观察",
         "",
@@ -416,16 +412,18 @@ def main() -> int:
     if not items:
         raise RuntimeError("No AI/AIGC news items collected from RSS sources.")
 
-    note = ""
     try:
-        markdown = build_editor_brief(items, generated_at)
+        markdown, provider = build_editor_brief(items, generated_at)
+        note = ""
     except Exception as exc:
-        note = f"OpenAI 编辑模型调用失败，已降级为规则版：{exc}"
+        markdown, provider = None, "rules"
+        note = f"AI 编辑模型调用失败，已降级为规则版：{exc}"
         print(f"warn: {note}", file=sys.stderr)
-        markdown = None
     if not markdown:
-        note = note or "未配置 OPENAI_API_KEY，已降级为规则版。"
+        note = note or "未配置 OPENAI_API_KEY 或 GEMINI_API_KEY，已降级为规则版。"
         markdown = build_rule_brief(items, generated_at, note)
+    else:
+        print(f"Generated editorial brief with {provider}.")
 
     OUT_DIR.mkdir(exist_ok=True)
     date = generated_at.date().isoformat()
