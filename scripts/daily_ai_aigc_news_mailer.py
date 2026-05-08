@@ -4,11 +4,13 @@ from __future__ import annotations
 import datetime as dt
 import email.utils
 import html
+import json
 import os
 import re
 import smtplib
 import ssl
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -20,31 +22,39 @@ DEFAULT_MAIL = "hjh836261459@qq.com"
 OUT_DIR = Path("out")
 TZ = dt.timezone(dt.timedelta(hours=8))
 
-GROUPS = [
-    "头条要闻",
+CATEGORIES = [
+    "今日要点",
+    "技术与模型",
+    "公司与产品新闻",
     "中国 AI/AIGC 动态",
-    "产品与公司动态",
-    "研究与开源",
-    "政策与监管",
+    "政策、监管与安全",
     "投融资与产业",
+    "应用与生态",
+    "编辑观察",
 ]
 
 CHINA_MARKERS = [
-    "中国", "国内", "北京", "上海", "深圳", "杭州", "阿里", "百度", "腾讯", "华为", "字节", "豆包",
-    "通义", "文心", "混元", "盘古", "Kimi", "月之暗面", "智谱", "阶跃星辰", "MiniMax", "商汤",
-    "科大讯飞", "寒武纪", "机器之心", "量子位", "36氪", "晚点", "雷峰网", "网信办", "工信部",
+    "中国", "国内", "北京", "上海", "深圳", "杭州", "广州", "香港", "阿里", "百度", "腾讯", "华为",
+    "字节", "豆包", "通义", "文心", "混元", "盘古", "Kimi", "月之暗面", "智谱", "阶跃星辰",
+    "MiniMax", "商汤", "科大讯飞", "寒武纪", "机器之心", "量子位", "36氪", "晚点", "雷峰网",
+    "网信办", "工信部", "科技部", "国家数据局", "新华社", "财新", "第一财经",
+]
+
+LOW_QUALITY_MARKERS = [
+    "stock", "stocks", "price target", "downgrade", "upgrade", "shares", "nasdaq", "nyse",
+    "coupon", "deal", "discount", "sponsored", "press release", "opinion", "horoscope",
 ]
 
 QUERIES = [
-    ("产品与公司动态", "en", '(OpenAI OR Anthropic OR DeepMind OR "Google AI" OR Microsoft OR Meta OR Nvidia) when:1d'),
-    ("研究与开源", "en", '("generative AI" OR "large language model" OR LLM OR "AI model" OR "open source AI") when:1d'),
-    ("政策与监管", "en", '("AI regulation" OR "AI safety" OR "AI policy" OR "AI copyright" OR "AI governance") when:1d'),
-    ("投融资与产业", "en", '("AI startup" OR "AI funding" OR "AI chip" OR "AI data center" OR "AI investment") when:1d'),
-    ("中国 AI/AIGC 动态", "zh", '(人工智能 OR AIGC OR 生成式AI OR 大模型) when:1d'),
-    ("中国 AI/AIGC 动态", "zh", '(国产大模型 OR 多模态模型 OR 开源模型 OR 智能体) when:1d'),
-    ("中国 AI/AIGC 动态", "zh", '(AI 算力 OR 智算中心 OR AI 芯片 OR 国产大模型) when:1d'),
-    ("中国 AI/AIGC 动态", "zh", '(网信办 人工智能 OR 工信部 人工智能 OR AI 监管 OR 生成式AI 备案) when:1d'),
-    ("投融资与产业", "zh", '(AI 融资 OR 大模型 融资 OR AIGC 投融资 OR AI 应用) when:1d'),
+    ("technology", "en", '("large language model" OR "AI model" OR "generative AI" OR "AI agent" OR "open source AI") when:1d'),
+    ("company", "en", '(OpenAI OR Anthropic OR DeepMind OR "Google AI" OR Microsoft OR Meta OR Nvidia OR Apple) when:1d'),
+    ("policy", "en", '("AI regulation" OR "AI safety" OR "AI policy" OR "AI copyright" OR "AI governance") when:1d'),
+    ("industry", "en", '("AI startup" OR "AI funding" OR "AI chip" OR "AI data center" OR "AI investment") when:1d'),
+    ("china", "zh", '(人工智能 OR AIGC OR 生成式AI OR 大模型) when:1d'),
+    ("china", "zh", '(国产大模型 OR 多模态模型 OR 开源模型 OR 智能体) when:1d'),
+    ("china", "zh", '(AI 算力 OR 智算中心 OR AI 芯片 OR 国产大模型) when:1d'),
+    ("china", "zh", '(网信办 人工智能 OR 工信部 人工智能 OR AI 监管 OR 生成式AI 备案) when:1d'),
+    ("industry", "zh", '(AI 融资 OR 大模型 融资 OR AIGC 投融资 OR AI 应用) when:1d'),
 ]
 
 FALLBACK_CHINA_QUERIES = [
@@ -59,9 +69,20 @@ class NewsItem:
     source: str
     published: dt.datetime | None
     link: str
-    summary: str
-    group: str
+    snippet: str
+    query_group: str
     locale: str
+
+    def record(self) -> dict[str, str]:
+        return {
+            "title": self.title,
+            "source": self.source,
+            "published": format_date(self.published),
+            "link": self.link,
+            "snippet": self.snippet,
+            "query_group": self.query_group,
+            "locale": self.locale,
+        }
 
 
 def env(name: str, default: str = "") -> str:
@@ -70,14 +91,6 @@ def env(name: str, default: str = "") -> str:
 
 def now_cn() -> dt.datetime:
     return dt.datetime.now(TZ)
-
-
-def rss_url(query: str, locale: str) -> str:
-    if locale == "zh":
-        params = {"q": query, "hl": "zh-CN", "gl": "CN", "ceid": "CN:zh-Hans"}
-    else:
-        params = {"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"}
-    return "https://news.google.com/rss/search?" + urllib.parse.urlencode(params)
 
 
 def clean(value: str) -> str:
@@ -99,6 +112,18 @@ def parse_date(value: str | None) -> dt.datetime | None:
         return None
 
 
+def format_date(value: dt.datetime | None) -> str:
+    return value.strftime("%Y-%m-%d %H:%M") if value else "时间未标注"
+
+
+def rss_url(query: str, locale: str) -> str:
+    if locale == "zh":
+        params = {"q": query, "hl": "zh-CN", "gl": "CN", "ceid": "CN:zh-Hans"}
+    else:
+        params = {"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"}
+    return "https://news.google.com/rss/search?" + urllib.parse.urlencode(params)
+
+
 def source_from(node: ET.Element, title: str) -> str:
     source = node.find("source")
     if source is not None and source.text:
@@ -108,17 +133,10 @@ def source_from(node: ET.Element, title: str) -> str:
     return "Google News"
 
 
-def summary_from(title: str, description: str) -> str:
-    description = clean(description)
-    if description:
-        return description[:360]
-    return f"这条动态与 AI/AIGC 相关，建议结合原文进一步查看细节：{title}"
-
-
-def fetch_items(group: str, locale: str, query: str, limit: int = 12) -> list[NewsItem]:
+def fetch_items(group: str, locale: str, query: str, limit: int = 14) -> list[NewsItem]:
     request = urllib.request.Request(
         rss_url(query, locale),
-        headers={"User-Agent": "Mozilla/5.0 ai-aigc-news-mailer/1.0"},
+        headers={"User-Agent": "Mozilla/5.0 ai-aigc-news-editor/2.0"},
     )
     with urllib.request.urlopen(request, timeout=25) as response:
         root = ET.fromstring(response.read())
@@ -127,6 +145,7 @@ def fetch_items(group: str, locale: str, query: str, limit: int = 12) -> list[Ne
     for node in root.findall("./channel/item")[:limit]:
         title = clean(node.findtext("title") or "")
         link = clean(node.findtext("link") or "")
+        snippet = clean(node.findtext("description") or "")[:520]
         if not title or not link:
             continue
         items.append(
@@ -135,8 +154,8 @@ def fetch_items(group: str, locale: str, query: str, limit: int = 12) -> list[Ne
                 source=source_from(node, title),
                 published=parse_date(node.findtext("pubDate")),
                 link=link,
-                summary=summary_from(title, node.findtext("description") or ""),
-                group=group,
+                snippet=snippet,
+                query_group=group,
                 locale=locale,
             )
         )
@@ -150,9 +169,41 @@ def key_for(title: str) -> str:
     return title[:120]
 
 
+def contains_any(text: str, markers: list[str]) -> bool:
+    text = text.lower()
+    return any(marker.lower() in text for marker in markers)
+
+
 def is_china(item: NewsItem) -> bool:
-    text = f"{item.title} {item.source} {item.summary}"
-    return item.locale == "zh" or any(marker.lower() in text.lower() for marker in CHINA_MARKERS)
+    return item.locale == "zh" or contains_any(f"{item.title} {item.source} {item.snippet}", CHINA_MARKERS)
+
+
+def is_low_quality(item: NewsItem) -> bool:
+    text = f"{item.title} {item.source} {item.snippet}".lower()
+    if contains_any(text, LOW_QUALITY_MARKERS):
+        return True
+    if len(item.title) < 8:
+        return True
+    return False
+
+
+def score(item: NewsItem) -> int:
+    text = f"{item.title} {item.source} {item.snippet}".lower()
+    points = 0
+    high_signal = [
+        "openai", "anthropic", "deepmind", "google", "microsoft", "nvidia", "meta", "apple",
+        "model", "agent", "benchmark", "open source", "regulation", "safety", "funding", "chip", "data center",
+        "大模型", "人工智能", "生成式", "智能体", "多模态", "开源", "算力", "芯片", "监管", "融资", "备案",
+    ]
+    points += sum(2 for word in high_signal if word in text)
+    if is_china(item):
+        points += 3
+    if item.published:
+        age = max(0, int((now_cn() - item.published).total_seconds() // 3600))
+        points += max(0, 36 - age) // 6
+    if is_low_quality(item):
+        points -= 8
+    return points
 
 
 def collect_news() -> list[NewsItem]:
@@ -163,105 +214,179 @@ def collect_news() -> list[NewsItem]:
         except Exception as exc:
             print(f"warn: failed query {query}: {exc}", file=sys.stderr)
 
-    if sum(1 for item in collected if is_china(item)) < 5:
+    if sum(1 for item in collected if is_china(item)) < 8:
         for query in FALLBACK_CHINA_QUERIES:
             try:
-                collected.extend(fetch_items("中国 AI/AIGC 动态", "zh", query))
+                collected.extend(fetch_items("china", "zh", query))
             except Exception as exc:
                 print(f"warn: failed fallback query {query}: {exc}", file=sys.stderr)
 
     seen: set[str] = set()
     unique: list[NewsItem] = []
-    for item in sorted(collected, key=lambda x: x.published or dt.datetime.min.replace(tzinfo=TZ), reverse=True):
+    for item in sorted(collected, key=score, reverse=True):
         key = key_for(item.title)
-        if key and key not in seen:
-            seen.add(key)
-            unique.append(item)
+        if not key or key in seen or is_low_quality(item):
+            continue
+        seen.add(key)
+        unique.append(item)
     return unique
 
 
-def score(item: NewsItem) -> int:
-    text = f"{item.title} {item.summary}".lower()
-    points = sum(2 for word in ["openai", "anthropic", "google", "microsoft", "nvidia", "大模型", "人工智能", "算力", "监管", "融资"] if word in text)
-    if item.published:
-        age = max(0, int((now_cn() - item.published).total_seconds() // 3600))
-        points += max(0, 24 - age) // 6
+def editor_instructions() -> str:
+    return """
+你是一名资深 AI 产业与技术新闻编辑，写给一位希望快速理解 AI/AIGC 行业变化的中文读者。
+你的任务不是罗列链接，而是从候选新闻中筛选真正有价值的信息，翻译、归并、总结成高质量中文简报。
+
+硬性要求：
+1. 全文必须使用中文。英文标题和英文摘要必须翻译并重写为自然中文。
+2. 只选择 10-16 条高价值新闻。忽略重复、低信息量、SEO、股票短线、软文、纯观点、没有事实增量的内容。
+3. 每条新闻必须说明：发生了什么、为什么重要、可能影响谁/哪个方向。
+4. 不要把链接当正文。链接只放在每条末尾作为来源。
+5. 不要编造候选新闻里没有的数字、融资金额、公司结论或发布时间。信息不足时写“基于来源摘要判断”。
+6. 输出 Markdown，结构固定如下：
+
+# AI/AIGC 每日高质量简报 - YYYY-MM-DD
+
+## 今日要点
+用 3-5 条短句概括今天最值得关注的变化。
+
+## 技术与模型
+每条格式：
+### 中文标题
+来源：来源｜时间：时间
+摘要：2-3 句中文总结。
+影响：1 句说明它对技术路线、开发者或行业的意义。
+链接：URL
+
+## 公司与产品新闻
+同上。
+
+## 中国 AI/AIGC 动态
+同上。必须优先保留中国相关动态。
+
+## 政策、监管与安全
+同上。
+
+## 投融资与产业
+同上。
+
+## 应用与生态
+同上。
+
+## 编辑观察
+给出 4-6 条趋势判断，其中至少 2 条必须结合中国市场、政策或产业环境。
+
+如果某个分类没有高质量新闻，可以省略该分类。不要输出“候选新闻列表”。
+""".strip()
+
+
+def extract_response_text(data: dict) -> str:
+    if isinstance(data.get("output_text"), str) and data["output_text"].strip():
+        return data["output_text"].strip()
+    parts: list[str] = []
+    for output in data.get("output", []) or []:
+        for content in output.get("content", []) or []:
+            text = content.get("text") or content.get("output_text")
+            if isinstance(text, str):
+                parts.append(text)
+    if parts:
+        return "\n".join(parts).strip()
+    raise RuntimeError("OpenAI response did not contain text output.")
+
+
+def build_editor_brief(items: list[NewsItem], generated_at: dt.datetime) -> str | None:
+    api_key = env("OPENAI_API_KEY")
+    if not api_key:
+        return None
+
+    model = env("OPENAI_MODEL", "gpt-5-mini")
+    candidates = [item.record() for item in sorted(items, key=score, reverse=True)[:55]]
+    payload = {
+        "model": model,
+        "instructions": editor_instructions(),
+        "input": "生成日期：{}\n候选新闻 JSON：\n{}".format(
+            generated_at.date().isoformat(),
+            json.dumps(candidates, ensure_ascii=False, indent=2),
+        ),
+        "max_output_tokens": int(env("OPENAI_MAX_OUTPUT_TOKENS", "7000")),
+    }
+    request = urllib.request.Request(
+        "https://api.openai.com/v1/responses",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:1000]
+        raise RuntimeError(f"OpenAI API failed: HTTP {exc.code}: {detail}") from exc
+    return extract_response_text(data)
+
+
+def fallback_category(item: NewsItem) -> str:
+    text = f"{item.title} {item.source} {item.snippet}".lower()
     if is_china(item):
-        points += 1
-    return points
+        return "中国 AI/AIGC 动态"
+    if contains_any(text, ["research", "benchmark", "open source", "model", "agent", "论文", "开源", "模型", "智能体", "多模态"]):
+        return "技术与模型"
+    if contains_any(text, ["regulation", "safety", "policy", "copyright", "监管", "政策", "安全", "版权"]):
+        return "政策、监管与安全"
+    if contains_any(text, ["funding", "investment", "chip", "data center", "融资", "投资", "芯片", "算力"]):
+        return "投融资与产业"
+    return "公司与产品新闻"
 
 
-def assign_groups(items: list[NewsItem]) -> dict[str, list[NewsItem]]:
-    groups = {name: [] for name in GROUPS}
-    ranked = sorted(items, key=score, reverse=True)
-    groups["头条要闻"] = ranked[:6]
-    for item in ranked:
-        target = "中国 AI/AIGC 动态" if is_china(item) else item.group
-        groups.setdefault(target, []).append(item)
-    for name in GROUPS:
-        groups[name] = groups[name][:8 if name == "中国 AI/AIGC 动态" else 6]
-    return groups
+def build_rule_brief(items: list[NewsItem], generated_at: dt.datetime, note: str = "") -> str:
+    selected = sorted(items, key=score, reverse=True)[:18]
+    groups: dict[str, list[NewsItem]] = {category: [] for category in CATEGORIES}
+    for item in selected:
+        groups.setdefault(fallback_category(item), []).append(item)
 
-
-def format_date(value: dt.datetime | None) -> str:
-    return value.strftime("%Y-%m-%d %H:%M") if value else "时间未标注"
-
-
-def trends(groups: dict[str, list[NewsItem]]) -> list[str]:
-    china = groups.get("中国 AI/AIGC 动态", [])
-    policy = groups.get("政策与监管", [])
-    funding = groups.get("投融资与产业", [])
-    research = groups.get("研究与开源", [])
-    product = groups.get("产品与公司动态", [])
-    result = []
-    if china:
-        result.append("中国市场需要单独观察：国产大模型、算力、应用落地和监管节奏会与国际模型发布共同影响产业机会。")
-    else:
-        result.append("过去 24 小时中国相关新闻相对较少，简报已用近 72 小时窗口补充国内动态，后续仍会保持中国来源优先检索。")
-    result.append("国内 AI 产业长期竞争会回到算力成本、模型备案、行业数据和企业真实部署能力，而不只是模型榜单。")
-    if policy:
-        result.append("监管与安全议题正在前置，模型能力、内容版权、数据合规和网络安全会越来越影响产品节奏。")
-    if funding:
-        result.append("资本继续向算力基础设施、行业应用和能产生现金流的 AI 公司集中，纯概念型项目会更难获得持续关注。")
-    if research:
-        result.append("研究和开源重点正在从参数规模转向推理效率、多模态、智能体和端侧部署，开发者生态会因此加速迭代。")
-    if product:
-        result.append("产品竞争正在从聊天框扩展到语音、视频、多模态和行业工作流，AI 厂商会更强调完整任务闭环。")
-    return result[:5]
-
-
-def render(groups: dict[str, list[NewsItem]], generated_at: dt.datetime) -> str:
-    today = generated_at.date().isoformat()
+    date = generated_at.date().isoformat()
     lines = [
-        f"# AI/AIGC 每日新闻简报 - {today}",
-        "",
-        f"生成时间：{generated_at.strftime('%Y-%m-%d %H:%M')}（Asia/Shanghai）",
-        "",
-        "覆盖范围：过去 24 小时全球与中国 AI/AIGC 新闻；若中国相关新闻不足，会补充近 72 小时内的重要国内动态。",
+        f"# AI/AIGC 每日高质量简报 - {date}",
         "",
     ]
-    for group in GROUPS:
-        lines.extend([f"## {group}", ""])
-        items = groups.get(group, [])
-        if not items:
-            lines.extend(["本期未检索到足够高相关度的新闻。", ""])
+    if note:
+        lines.extend([f"> 说明：{note}", ""])
+    lines.extend([
+        "## 今日要点",
+        "",
+        "- 本期已过滤重复、低信息量和明显营销化内容，优先保留模型、产品、政策、投融资和中国市场相关动态。",
+        "- 建议配置 OPENAI_API_KEY，以启用真正的编辑级中文筛选、翻译和深度总结。",
+        "- 以下为规则版简报，已尽量避免只堆链接，但总结深度低于模型编辑版。",
+        "",
+    ])
+
+    for category in ["技术与模型", "公司与产品新闻", "中国 AI/AIGC 动态", "政策、监管与安全", "投融资与产业", "应用与生态"]:
+        rows = groups.get(category, [])[:5]
+        if not rows:
             continue
-        for index, item in enumerate(items, 1):
+        lines.extend([f"## {category}", ""])
+        for item in rows:
+            title = re.sub(r"\s+-\s+[^-]{2,80}$", "", item.title).strip()
             lines.extend([
-                f"### {index}. {item.title}",
-                "",
-                f"来源：{item.source}  ",
-                f"发布时间：{format_date(item.published)}  ",
-                "",
-                item.summary,
-                "",
+                f"### {title}",
+                f"来源：{item.source}｜时间：{format_date(item.published)}",
+                f"摘要：{item.snippet or '基于标题判断，这是一条与 AI/AIGC 相关的动态，建议结合来源查看细节。'}",
+                "影响：这条动态值得关注，因为它可能影响 AI 技术路线、产品竞争、产业投入或监管环境。",
                 f"链接：{item.link}",
                 "",
             ])
-    lines.extend(["## 今日最值得关注的 5 条趋势", ""])
-    for index, item in enumerate(trends(groups), 1):
-        lines.append(f"{index}. {item}")
-    lines.append("")
+
+    lines.extend([
+        "## 编辑观察",
+        "",
+        "1. 国内外 AI 新闻需要分开看：海外更常见模型、算力和平台发布，中国市场更受政策、备案、行业落地和国产算力影响。",
+        "2. AIGC 的重点正在从单点工具转向工作流，真正有价值的新闻通常会体现成本、效率、场景或监管变化。",
+        "3. 后续应优先关注模型能力、推理成本、数据合规、行业应用和投融资质量，而不是单纯发布数量。",
+        "",
+    ])
     return "\n".join(lines)
 
 
@@ -290,12 +415,23 @@ def main() -> int:
     items = collect_news()
     if not items:
         raise RuntimeError("No AI/AIGC news items collected from RSS sources.")
-    groups = assign_groups(items)
-    markdown = render(groups, generated_at)
+
+    note = ""
+    try:
+        markdown = build_editor_brief(items, generated_at)
+    except Exception as exc:
+        note = f"OpenAI 编辑模型调用失败，已降级为规则版：{exc}"
+        print(f"warn: {note}", file=sys.stderr)
+        markdown = None
+    if not markdown:
+        note = note or "未配置 OPENAI_API_KEY，已降级为规则版。"
+        markdown = build_rule_brief(items, generated_at, note)
+
     OUT_DIR.mkdir(exist_ok=True)
-    output_path = OUT_DIR / f"AI-AIGC-news-{generated_at.date().isoformat()}.md"
+    date = generated_at.date().isoformat()
+    output_path = OUT_DIR / f"AI-AIGC-news-{date}.md"
     output_path.write_text(markdown, encoding="utf-8")
-    subject = f"AI/AIGC 每日新闻简报 - {generated_at.date().isoformat()}"
+    subject = f"AI/AIGC 每日高质量简报 - {date}"
     send_mail(subject, markdown, output_path)
     print(f"Sent {subject} to {env('MAIL_TO', DEFAULT_MAIL)}")
     return 0
