@@ -1,0 +1,41 @@
+name: Daily AI/AIGC News Mail
+
+on:
+  schedule:
+    # 01:00 UTC = 09:00 Asia/Shanghai
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  send-news-mail:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build and send AI/AIGC news brief
+        env:
+          QQ_SMTP_USER: ${{ secrets.QQ_SMTP_USER }}
+          QQ_SMTP_AUTH_CODE: ${{ secrets.QQ_SMTP_AUTH_CODE }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          NEWS_LOOKBACK_HOURS: "24"
+          CHINA_FALLBACK_HOURS: "72"
+        run: python scripts/daily_ai_aigc_news_mailer.py
+
+      - name: Upload generated brief
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-aigc-news-brief
+          path: out/*.md
+          if-no-files-found: ignore
