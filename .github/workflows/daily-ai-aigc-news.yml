@@ -5,6 +5,12 @@ on:
     # 01:00 UTC = 09:00 Asia/Shanghai
     - cron: "0 1 * * *"
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/daily-ai-aigc-news.yml"
+      - "scripts/daily_ai_aigc_news_mailer.py"
 
 permissions:
   contents: read
