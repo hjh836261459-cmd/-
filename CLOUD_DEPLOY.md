@@ -12,8 +12,6 @@
 - 分类包括：技术与模型、公司与产品新闻、中国 AI/AIGC 动态、政策监管与安全、投融资与产业、应用与生态、编辑观察。
 - 链接只作为来源保留，不作为正文主体。
 
-要启用真正的编辑级总结，需要配置 `OPENAI_API_KEY`。如果不配置，脚本会降级为规则版，仍会发邮件，但总结质量会明显低一些。
-
 ## 必需 GitHub Secrets
 
 进入 GitHub 仓库：
@@ -23,17 +21,21 @@
 添加：
 
 - `QQ_SMTP_AUTH_CODE`：QQ 邮箱 SMTP 授权码
-- `OPENAI_API_KEY`：OpenAI API Key，用于筛选、翻译、总结和写成中文简报
+- `GEMINI_API_KEY`：Gemini API Key，用于免费/低成本生成中文编辑简报
 
-## 可选配置
+## 可选 GitHub Secrets / Variables
 
-可选添加 repository variables 或 secrets：
-
+- `OPENAI_API_KEY`：可选；如果配置，脚本会优先用 OpenAI 生成简报
 - `QQ_SMTP_USER`：默认 `hjh836261459@qq.com`
 - `MAIL_TO`：默认 `hjh836261459@qq.com`
 - `OPENAI_MODEL`：默认 `gpt-5-mini`
+- `GEMINI_MODEL`：默认 `gemini-2.5-flash`
 
-如果不设置 `QQ_SMTP_USER` 和 `MAIL_TO`，脚本会默认使用 `hjh836261459@qq.com` 作为发件人与收件人。
+模型优先级：
+
+1. 有 `OPENAI_API_KEY` 时优先用 OpenAI
+2. 没有 OpenAI key 但有 `GEMINI_API_KEY` 时用 Gemini
+3. 两者都没有时降级为规则版，仍会发邮件，但总结质量较低
 
 ## 运行时间
 
@@ -50,8 +52,8 @@ GitHub Actions 的 cron 使用 UTC 时间：
 
 ## 可能失败的情况
 
-- `OPENAI_API_KEY` 未配置或失效：会降级为规则版，或在 API 错误时记录 warning。
+- `GEMINI_API_KEY` 未配置、失效或免费额度受限。
 - QQ SMTP 授权码失效或没有开启 SMTP。
 - QQ 邮箱限制来自云端 IP 的登录或发信。
-- GitHub Actions 无法访问 Google News RSS 或 OpenAI API。
+- GitHub Actions 无法访问 Google News RSS、Gemini API 或 OpenAI API。
 - 邮件被 QQ 邮箱反垃圾策略拦截。
