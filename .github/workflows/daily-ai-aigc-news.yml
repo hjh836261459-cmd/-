@@ -30,6 +30,7 @@ jobs:
           python-version: "3.12"
 
       - name: Build and send AI/AIGC news brief
+        # Manual trigger marker: after QQ_SMTP_AUTH_CODE secret setup.
         env:
           QQ_SMTP_USER: ${{ secrets.QQ_SMTP_USER }}
           QQ_SMTP_AUTH_CODE: ${{ secrets.QQ_SMTP_AUTH_CODE }}
