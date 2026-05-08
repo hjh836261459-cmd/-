@@ -36,6 +36,8 @@ jobs:
           MAIL_TO: ${{ secrets.MAIL_TO }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
           NEWS_LOOKBACK_HOURS: "24"
           CHINA_FALLBACK_HOURS: "72"
         run: python scripts/daily_ai_aigc_news_mailer.py
