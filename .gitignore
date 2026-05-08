@@ -1,0 +1,12 @@
+# Local credentials and generated output
+*.sec
+qq-smtp-send.log
+out/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Local editor files
+.vscode/
+.idea/
