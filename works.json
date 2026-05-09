@@ -2,7 +2,13 @@
   "site": {
     "title": "AI影像作品馆",
     "owner": "Your Name",
-    "description": "精选 AI 视频、实验影像和视觉概念短片。"
+    "description": "精选 AI 视频、实验影像和视觉概念短片。",
+    "contact": {
+      "email": "your@email.com",
+      "wechat": "填写你的微信号",
+      "xiaohongshu": "填写小红书主页",
+      "bilibili": "填写 B 站主页"
+    }
   },
   "works": [
     {
@@ -14,6 +20,9 @@
       "duration": "00:36",
       "tags": ["AI Video", "Cinematic", "Worldbuilding"],
       "description": "一支用于占位演示的作品卡片。上传你的真实视频后，可以在后台替换或删除它。",
+      "making": "以未来城市记忆档案为核心概念，强调玻璃屏幕、光轨和静默运动感。正式发布作品时，可以在这里记录镜头设计、提示词思路和后期处理方式。",
+      "model": "Runway / Kling / Pika / 可替换",
+      "role": "导演、Prompt、剪辑、调色",
       "prompt": "A cinematic AI city memory archive with glass screens, luminous traces, and silent motion.",
       "poster": "",
       "videoUrl": "",
@@ -29,6 +38,9 @@
       "duration": "01:12",
       "tags": ["Motion", "Dream", "Generative"],
       "description": "用来展示排版和筛选效果的示例条目。公开视频前建议替换成自己的作品。",
+      "making": "用梦境碎片式结构测试 AI 影像的连续性、节奏和抽象叙事。",
+      "model": "AI Video Pipeline",
+      "role": "概念、生成、剪辑",
       "prompt": "Abstract cinematic dream fragments flowing through a gallery-like digital space.",
       "poster": "",
       "videoUrl": "",
