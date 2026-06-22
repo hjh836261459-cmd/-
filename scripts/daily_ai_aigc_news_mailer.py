@@ -270,6 +270,39 @@ def extract_gemini_text(data: dict) -> str:
     raise RuntimeError("Gemini response did not contain text output.")
 
 
+
+def extract_chat_completion_text(data: dict) -> str:
+    choices = data.get("choices", []) or []
+    if not choices:
+        raise RuntimeError("Chat completion response did not contain choices.")
+    content = choices[0].get("message", {}).get("content")
+    if isinstance(content, str) and content.strip():
+        return content.strip()
+    raise RuntimeError("Chat completion response did not contain text output.")
+
+
+def build_agnes_brief(prompt: str) -> str | None:
+    api_key = env("AGNES_API_KEY") or env("OPENAI_API_KEY")
+    if not api_key:
+        return None
+    base_url = env("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1").rstrip("/")
+    payload = {
+        "model": env("AGNES_MODEL", "agnes-2.0-flash"),
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.25,
+        "max_tokens": int(env("AGNES_MAX_OUTPUT_TOKENS", "7000")),
+        "stream": False,
+    }
+    request = urllib.request.Request(
+        f"{base_url}/chat/completions",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=120) as response:
+        return extract_chat_completion_text(json.loads(response.read().decode("utf-8")))
+
+
 def build_openai_brief(prompt: str) -> str | None:
     api_key = env("OPENAI_API_KEY")
     if not api_key:
@@ -314,7 +347,7 @@ def build_editor_brief(items: list[NewsItem], generated_at: dt.datetime) -> tupl
     prompt = editor_prompt(generated_at.date().isoformat(), candidates)
     errors: list[str] = []
 
-    for name, builder in (("OpenAI", build_openai_brief), ("Gemini", build_gemini_brief)):
+    for name, builder in (("AgnesAI", build_agnes_brief), ("Gemini", build_gemini_brief)):
         try:
             result = builder(prompt)
             if result:
@@ -420,7 +453,7 @@ def main() -> int:
         note = f"AI 编辑模型调用失败，已降级为规则版：{exc}"
         print(f"warn: {note}", file=sys.stderr)
     if not markdown:
-        note = note or "未配置 OPENAI_API_KEY 或 GEMINI_API_KEY，已降级为规则版。"
+        note = note or "未配置 AgnesAI/OpenAI API Key 或 GEMINI_API_KEY，已降级为规则版。"
         markdown = build_rule_brief(items, generated_at, note)
     else:
         print(f"Generated editorial brief with {provider}.")
